@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Dashboard - Live from Google Sheets</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- Google Fonts: Prompt -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Prompt', sans-serif; background-color: #f3f4f6; }
+        .chart-container { position: relative; height: 300px; width: 100%; }
+        /* Loader */
+        .loader { border-top-color: #3b82f6; -webkit-animation: spinner 1.5s linear infinite; animation: spinner 1.5s linear infinite; }
+        @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="text-gray-800 antialiased p-4 md:p-6">
+
+    <!-- Header & Config Section -->
+    <div class="max-w-7xl mx-auto mb-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            </div>
+            <h1 class="text-xl font-bold text-gray-800">ระบบติดตามยอดขาย (Sales Dashboard)</h1>
+        </div>
+
+        <div class="flex flex-col md:flex-row w-full md:w-auto gap-2">
+            <!-- ซ่อน/แสดง กล่องใส่ URL -->
+            <input type="text" id="csvUrlInput" placeholder="วางลิงก์ Google Sheet (แบบเผยแพร่เป็น CSV) ที่นี่..." class="w-full md:w-96 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button onclick="saveAndLoadData()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex-shrink-0">
+                ดึงข้อมูลสด
+            </button>
+            <div class="flex items-center gap-2 ml-2">
+                <label class="inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="autoRefreshToggle" class="sr-only peer" onchange="toggleAutoRefresh()">
+                  <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  <span class="ms-2 text-xs font-medium text-gray-600">รีเฟรชออโต้ (5 นาที)</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instructions / Status (Collapsible) -->
+    <div id="instructionBox" class="max-w-7xl mx-auto mb-6 bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100 hidden">
+        <p class="font-semibold mb-1">วิธีนำลิงก์จาก Google Sheet มาใส่:</p>
+        <ol class="list-decimal pl-5 space-y-1">
+            <li>เปิด Google Sheet หน้า `log` ของคุณ</li>
+            <li>ไปที่เมนู <strong>ไฟล์ (File) > แชร์ (Share) > เผยแพร่ทางเว็บ (Publish to web)</strong></li>
+            <li>เลือก <strong>"log"</strong> (หรือชีตที่ต้องการ) และเปลี่ยน "หน้าเว็บ" เป็น <strong>"ค่าที่คั่นด้วยจุลภาค (.csv)"</strong></li>
+            <li>คลิก "เผยแพร่" แล้วคัดลอกลิงก์ที่ได้ มาวางในช่องด้านบน</li>
+        </ol>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loadingIndicator" class="hidden flex justify-center items-center py-20">
+        <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mb-4"></div>
+        <span class="ml-4 text-gray-600 font-medium">กำลังโหลดข้อมูล...</span>
+    </div>
+
+    <!-- Dashboard Content -->
+    <div id="dashboardContent" class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- KPIs -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <!-- Total Sales -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+                <span class="text-sm font-medium text-gray-500 mb-1">ยอดขายรวม (บาท)</span>
+                <span id="kpiTotalSales" class="text-3xl font-bold text-gray-800">฿0.00</span>
+                <div class="mt-2 text-xs text-green-600 flex items-center font-medium">
+                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
+                    จากข้อมูลทั้งหมด
+                </div>
+            </div>
+            <!-- Total Orders -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+                <span class="text-sm font-medium text-gray-500 mb-1">จำนวนรายการสั่งซื้อ</span>
+                <span id="kpiTotalOrders" class="text-3xl font-bold text-gray-800">0</span>
+                <div class="mt-2 text-xs text-gray-500">รายการ</div>
+            </div>
+            <!-- Items Sold -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+                <span class="text-sm font-medium text-gray-500 mb-1">จำนวนสินค้าที่ขายได้</span>
+                <span id="kpiTotalItems" class="text-3xl font-bold text-gray-800">0</span>
+                <div class="mt-2 text-xs text-gray-500">ชิ้น/เมตร/ม้วน</div>
+            </div>
+            <!-- Top Channel -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+                <span class="text-sm font-medium text-gray-500 mb-1">ช่องทางที่ขายดีที่สุด</span>
+                <span id="kpiTopChannel" class="text-3xl font-bold text-blue-600">-</span>
+                <div id="kpiTopChannelSales" class="mt-2 text-xs text-gray-500">ยอดขาย: ฿0.00</div>
+            </div>
+        </div>
+
+        <!-- Charts Row 1 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Line Chart: Sales over Time -->
+            <div class="lg:col-span-2 bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">แนวโน้มยอดขายตามวัน</h2>
+                <div class="chart-container">
+                    <canvas id="salesTimelineChart"></canvas>
+                </div>
+            </div>
+            <!-- Doughnut Chart: Sales by Channel -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">สัดส่วนยอดขายตามช่องทาง</h2>
+                <div class="chart-container">
+                    <canvas id="channelChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row 2 & Table -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Bar Chart: Top Products -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">10 อันดับสินค้าขายดี (ตามมูลค่า)</h2>
+                <div class="chart-container">
+                    <canvas id="topProductsChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- Recent Orders Table -->
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">รายการบันทึกล่าสุด</h2>
+                <div class="overflow-x-auto flex-grow">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead>
+                            <tr>
+                                <th class="px-3 py-3 text-left font-semibold text-gray-600 bg-gray-50 rounded-tl-lg">วันที่</th>
+                                <th class="px-3 py-3 text-left font-semibold text-gray-600 bg-gray-50">ลูกค้า</th>
+                                <th class="px-3 py-3 text-left font-semibold text-gray-600 bg-gray-50">สินค้า</th>
+                                <th class="px-3 py-3 text-right font-semibold text-gray-600 bg-gray-50">ยอดรวม</th>
+                                <th class="px-3 py-3 text-center font-semibold text-gray-600 bg-gray-50 rounded-tr-lg">ช่องทาง</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentOrdersTableBody" class="divide-y divide-gray-100">
+                            <!-- Rows will be populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. DEFAULT DATA (Mocked from provided CSV snippet for instant preview)
+        // ==========================================
+        const defaultCsvData = `คำสั่งซื้อ,วันที่,ช่องทาง,รหัสลูกค้า,ชื่อลูกค้า,รหัสสินค้า,ราคาต่อหน่วย,จำนวน,หน่วย,ราคาต่อรายการ,ราคาสินค้ารวม
+1,26/07/2021,FB,c0019,กระจูด ทะเลน้อย,หนังเทียมลายPD #PD1067,63.00,20.0,หลา,"1,260.00",7560
+2,26/07/2021,FB,c0019,กระจูด ทะเลน้อย,หนังเทียมลายPD #PD239,63.00,20.0,หลา,"1,260.00",
+3,26/07/2021,FB,c0019,กระจูด ทะเลน้อย,หนังเทียมลายPD #PD585,63.00,20.0,หลา,"1,260.00",
+4,27/07/2021,LINE,c0020,คุณสมชาย,ฟองน้ำอัด 1 นิ้ว,220.00,5.0,แผ่น,"1,100.00",1100
+5,27/07/2021,Shopee,c0021,ร้านเบาะมอไซค์,หนังเทียมเย็บฟองน้ำ,250.00,10.0,เมตร,"2,500.00",2500
+6,28/07/2021,FB,c0022,อาร์ม นครศรี,ฟองน้ำอัด 0.5 นิ้ว,115.00,2.0,แผ่น,"230.00",230
+7,28/07/2021,FB,c0022,อาร์ม นครศรี,กาวด๊อก เล็ก,150.00,1.0,กระป๋อง,"150.00",
+8,29/07/2021,Lazada,c0023,สอ การเบาะ,เมจิกเทป ขาว,350.00,2.0,ชุด,"700.00",700
+9,30/07/2021,LINE,c0024,ช่างกร ปากน้ำโพ,PU ลายทราย,132.00,2.0,เมตร,"264.00",264
+10,30/07/2021,Tiktok,c0025,สมบูรณ์,หนังเทียมลายหนังแท้,113.00,5.0,เมตร,"565.00",565
+11,01/08/2021,FB,c0026,ร้าน A,หนังเทียมลายPD #PD1067,63.00,10.0,หลา,"630.00",630
+12,01/08/2021,LINE,c0027,ร้าน B,ฟองน้ำอัด 1 นิ้ว,220.00,10.0,แผ่น,"2,200.00",2200
+13,02/08/2021,Shopee,c0028,ช่างหมู,หนังเทียมลายเรดเดอร์,104.00,10.0,เมตร,"1,040.00",1040
+14,03/08/2021,FB,c0029,ออมเอง,หนังเทียมลายPN,3450.00,1.0,ม้วน,"3,450.00",3450
+15,04/08/2021,FB,c0030,Max Power,หนังเทียมเย็บฟองน้ำ,250.00,4.0,เมตร,"1,000.00",1000`;
+
+        // ==========================================
+        // 2. GLOBAL VARIABLES
+        // ==========================================
+        let charts = {};
+        let refreshInterval = null;
+
+        // ==========================================
+        // 3. INITIALIZATION
+        // ==========================================
+        document.addEventListener('DOMContentLoaded', () => {
+            // เช็คว่ามี URL เซฟไว้หรือไม่
+            const savedUrl = localStorage.getItem('prempvc_dashboard_url');
+            if (savedUrl) {
+                document.getElementById('csvUrlInput').value = savedUrl;
+            } else {
+                // แสดงวิธีใช้ถ้ายังไม่มี URL
+                document.getElementById('instructionBox').classList.remove('hidden');
+            }
+            
+            // โหลดข้อมูล
+            loadData();
+        });
+
+        // ==========================================
+        // 4. DATA FETCHING (PapaParse)
+        // ==========================================
+        function saveAndLoadData() {
+            const url = document.getElementById('csvUrlInput').value.trim();
+            if (url) {
+                localStorage.setItem('prempvc_dashboard_url', url);
+                document.getElementById('instructionBox').classList.add('hidden');
+            }
+            loadData();
+        }
+
+        function loadData() {
+            const url = document.getElementById('csvUrlInput').value.trim();
+            
+            showLoading(true);
+
+            if (url) {
+                // Parse Live CSV
+                Papa.parse(url, {
+                    download: true,
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        showLoading(false);
+                        processData(results.data);
+                    },
+                    error: function(err) {
+                        showLoading(false);
+                        alert("เกิดข้อผิดพลาดในการดึงข้อมูลจากลิงก์: " + err.message + "\n\nระบบจะแสดงข้อมูลตัวอย่างแทน");
+                        loadMockData();
+                    }
+                });
+            } else {
+                // Parse Default/Mock Data
+                loadMockData();
+            }
+        }
+
+        function loadMockData() {
+            Papa.parse(defaultCsvData, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    showLoading(false);
+                    processData(results.data);
+                }
+            });
+        }
+
+        function showLoading(isLoading) {
+            document.getElementById('loadingIndicator').classList.toggle('hidden', !isLoading);
+            document.getElementById('dashboardContent').classList.toggle('hidden', isLoading);
+        }
+
+        // ==========================================
+        // 5. DATA PROCESSING & UTILS
+        // ==========================================
+        function parsePrice(val) {
+            if (!val) return 0;
+            // Remove commas, quotes, spaces and parse float
+            let clean = String(val).replace(/,/g, '').replace(/"/g, '').trim();
+            let num = parseFloat(clean);
+            return isNaN(num) ? 0 : num;
+        }
+
+        function parseDate(dateStr) {
+            if (!dateStr) return null;
+            // Handle DD/MM/YYYY
+            const parts = dateStr.split('/');
+            if (parts.length === 3) {
+                return new Date(parts[2], parts[1] - 1, parts[0]);
+            }
+            return new Date(dateStr); // Fallback standard parse
+        }
+
+        function processData(rawData) {
+            if (!rawData || rawData.length === 0) return;
+
+            let totalSales = 0;
+            let totalItems = 0;
+            let salesByDate = {};
+            let salesByChannel = {};
+            let salesByProduct = {};
+            let validOrdersCount = 0;
+            let validRows = [];
+
+            rawData.forEach(row => {
+                // Validate Row (must have date or product)
+                if (!row['วันที่'] && !row['รหัสสินค้า']) return;
+
+                // Extract fields
+                const dateStr = row['วันที่'] || 'ไม่ระบุ';
+                const channel = row['ช่องทาง'] || row['Channel'] || 'ไม่ระบุ';
+                const product = row['รหัสสินค้า'] || row['รายการ'] || 'ไม่ระบุ';
+                const qty = parsePrice(row['จำนวน']);
+                
+                // Calculate item total price. Priority: ราคาต่อรายการ -> ราคาสินค้ารวม -> (ราคาต่อหน่วย * จำนวน)
+                let price = parsePrice(row['ราคาต่อรายการ']);
+                if (price === 0 && row['ราคาสินค้ารวม']) {
+                    price = parsePrice(row['ราคาสินค้ารวม']);
+                }
+                if (price === 0 && row['ราคาต่อหน่วย']) {
+                    price = parsePrice(row['ราคาต่อหน่วย']) * qty;
+                }
+
+                // Accumulate KPIs
+                if (price > 0) validOrdersCount++; // Count rows with value as an order item
+                totalSales += price;
+                totalItems += qty;
+
+                // Accumulate by Date
+                if (dateStr !== 'ไม่ระบุ') {
+                    if (!salesByDate[dateStr]) salesByDate[dateStr] = 0;
+                    salesByDate[dateStr] += price;
+                }
+
+                // Accumulate by Channel
+                if (!salesByChannel[channel]) salesByChannel[channel] = 0;
+                salesByChannel[channel] += price;
+
+                // Accumulate by Product
+                if (product !== 'ไม่ระบุ' && product !== '') {
+                    if (!salesByProduct[product]) salesByProduct[product] = 0;
+                    salesByProduct[product] += price;
+                }
+
+                validRows.push({
+                    date: dateStr,
+                    rawDate: parseDate(dateStr),
+                    customer: row['ชื่อลูกค้า'] || row['รหัสลูกค้า'] || '-',
+                    product: product,
+                    total: price,
+                    channel: channel
+                });
+            });
+
+            updateKPIs(totalSales, validOrdersCount, totalItems, salesByChannel);
+            updateCharts(salesByDate, salesByChannel, salesByProduct);
+            updateTable(validRows);
+        }
+
+        // ==========================================
+        // 6. UPDATE UI
+        // ==========================================
+        function updateKPIs(totalSales, totalOrders, totalItems, salesByChannel) {
+            // Format Currency
+            const thbFormatter = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
+            
+            document.getElementById('kpiTotalSales').innerText = thbFormatter.format(totalSales);
+            document.getElementById('kpiTotalOrders').innerText = totalOrders.toLocaleString('th-TH');
+            document.getElementById('kpiTotalItems').innerText = totalItems.toLocaleString('th-TH');
+
+            // Find Top Channel
+            let topCh = '-';
+            let maxSales = 0;
+            for (const [ch, sales] of Object.entries(salesByChannel)) {
+                if (sales > maxSales) { maxSales = sales; topCh = ch; }
+            }
+            document.getElementById('kpiTopChannel').innerText = topCh;
+            document.getElementById('kpiTopChannelSales').innerText = `ยอดขาย: ${thbFormatter.format(maxSales)}`;
+        }
+
+        function updateTable(rows) {
+            // Sort by date descending
+            rows.sort((a, b) => {
+                if (!a.rawDate || !b.rawDate) return 0;
+                return b.rawDate - a.rawDate;
+            });
+
+            const tbody = document.getElementById('recentOrdersTableBody');
+            tbody.innerHTML = '';
+            
+            // Take top 10 recent
+            const recent = rows.slice(0, 10);
+            const thbFormatter = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });
+
+            recent.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50 transition-colors';
+                
+                // Badge color based on channel
+                let bgBadge = 'bg-gray-100 text-gray-800';
+                const ch = row.channel.toUpperCase();
+                if(ch.includes('FB') || ch.includes('FACEBOOK')) bgBadge = 'bg-blue-100 text-blue-800';
+                else if(ch.includes('LINE')) bgBadge = 'bg-green-100 text-green-800';
+                else if(ch.includes('SHOPEE')) bgBadge = 'bg-orange-100 text-orange-800';
+                else if(ch.includes('LAZADA')) bgBadge = 'bg-indigo-100 text-indigo-800';
+                else if(ch.includes('TIKTOK')) bgBadge = 'bg-black text-white';
+
+                tr.innerHTML = `
+                    <td class="px-3 py-3 whitespace-nowrap">${row.date}</td>
+                    <td class="px-3 py-3 font-medium text-gray-800 truncate max-w-[120px]" title="${row.customer}">${row.customer}</td>
+                    <td class="px-3 py-3 truncate max-w-[150px]" title="${row.product}">${row.product}</td>
+                    <td class="px-3 py-3 text-right font-semibold text-blue-600">${thbFormatter.format(row.total)}</td>
+                    <td class="px-3 py-3 text-center">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${bgBadge}">
+                            ${row.channel}
+                        </span>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // ==========================================
+        // 7. CHART.JS RENDERERS
+        // ==========================================
+        function updateCharts(salesByDate, salesByChannel, salesByProduct) {
+            Chart.defaults.font.family = "'Prompt', sans-serif";
+            
+            // --- 1. Line Chart: Timeline ---
+            // Sort dates chronologically
+            const sortedDates = Object.keys(salesByDate).sort((a, b) => parseDate(a) - parseDate(b));
+            const timelineData = sortedDates.map(date => salesByDate[date]);
+
+            renderChart('salesTimelineChart', 'line', {
+                labels: sortedDates,
+                datasets: [{
+                    label: 'ยอดขาย (บาท)',
+                    data: timelineData,
+                    borderColor: '#2563eb', // blue-600
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#2563eb',
+                    pointRadius: 4,
+                    fill: true,
+                    tension: 0.3
+                }]
+            }, {
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: function(value) { return '฿' + value.toLocaleString(); } } }
+                }
+            });
+
+            // --- 2. Doughnut Chart: Channels ---
+            const chLabels = Object.keys(salesByChannel);
+            const chData = Object.values(salesByChannel);
+            const chColors = ['#3b82f6', '#10b981', '#f97316', '#6366f1', '#14b8a6', '#f43f5e', '#8b5cf6', '#0f172a'];
+
+            renderChart('channelChart', 'doughnut', {
+                labels: chLabels,
+                datasets: [{
+                    data: chData,
+                    backgroundColor: chColors.slice(0, chLabels.length),
+                    borderWidth: 1
+                }]
+            }, {
+                cutout: '65%',
+                plugins: {
+                    legend: { position: 'right' }
+                }
+            });
+
+            // --- 3. Bar Chart: Top Products ---
+            // Sort products by sales descending, take top 10
+            const sortedProducts = Object.entries(salesByProduct)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+            
+            const prodLabels = sortedProducts.map(p => {
+                // Truncate long names
+                let name = p[0];
+                return name.length > 25 ? name.substring(0, 25) + '...' : name;
+            });
+            const prodData = sortedProducts.map(p => p[1]);
+
+            renderChart('topProductsChart', 'bar', {
+                labels: prodLabels,
+                datasets: [{
+                    label: 'ยอดขาย (บาท)',
+                    data: prodData,
+                    backgroundColor: '#3b82f6',
+                    borderRadius: 4
+                }]
+            }, {
+                indexAxis: 'y', // Horizontal bar chart
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { callback: function(value) { return '฿' + value.toLocaleString(); } } }
+                }
+            });
+        }
+
+        function renderChart(canvasId, type, data, options) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            
+            // Destroy existing instance if exists to prevent overlapping
+            if (charts[canvasId]) {
+                charts[canvasId].destroy();
+            }
+
+            const defaultOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) { label += ': '; }
+                                if (context.parsed.y !== null && type !== 'bar' || (type === 'bar' && context.parsed.x !== null)) {
+                                    const val = type === 'bar' ? context.parsed.x : (type === 'doughnut' ? context.parsed : context.parsed.y);
+                                    label += new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(val);
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            };
+
+            // Deep merge options
+            const finalOptions = Object.assign({}, defaultOptions, options);
+            if (options && options.plugins) {
+                finalOptions.plugins = Object.assign({}, defaultOptions.plugins, options.plugins);
+            }
+            if (options && options.scales) {
+                finalOptions.scales = Object.assign({}, defaultOptions.scales, options.scales);
+            }
+
+            charts[canvasId] = new Chart(ctx, {
+                type: type,
+                data: data,
+                options: finalOptions
+            });
+        }
+
+        // ==========================================
+        // 8. AUTO REFRESH
+        // ==========================================
+        function toggleAutoRefresh() {
+            const isChecked = document.getElementById('autoRefreshToggle').checked;
+            if (isChecked) {
+                // Refresh every 5 minutes (300,000 ms)
+                refreshInterval = setInterval(loadData, 300000);
+            } else {
+                if (refreshInterval) clearInterval(refreshInterval);
+            }
+        }
+    </script>
+</body>
+</html>
